@@ -4,6 +4,7 @@ const router = express.Router();
 const authRoutes = require('./auth');
 const menuRoutes = require('./menu');
 const orderRoutes = require('./orders');
+const uploadRoutes = require('./uploads');
 
 // Health check route
 router.get('/health', (req, res) => {
@@ -14,5 +15,6 @@ router.get('/health', (req, res) => {
 router.use('/auth', authRoutes);
 router.use('/menu', menuRoutes);
 router.use('/orders', orderRoutes);
+router.use('/uploads', uploadRoutes);
 
 module.exports = router;

@@ -8,6 +8,7 @@ const cookieParser = require('cookie-parser');
 const http = require('http');
 const { Server } = require('socket.io');
 const morgan = require('morgan');
+const path = require('path');
 
 // Load environment variables
 dotenv.config();
@@ -38,6 +39,9 @@ app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:3000',
   credentials: true
 }));
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Basic route
 app.get('/', (req, res) => {
