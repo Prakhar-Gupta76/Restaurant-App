@@ -44,6 +44,10 @@ app.get('/', (req, res) => {
   res.send('Restaurant API Server Running');
 });
 
+// API Routes
+const routes = require('./src/routes');
+app.use('/api', routes);
+
 // Socket.io connection handler
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
