@@ -1,7 +1,7 @@
 const request = require('supertest');
 const express = require('express');
-const mongoose = require('mongoose');
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const request = require('supertest');
+const express = require('express');
 const menuController = require('../controllers/menuController');
 const authMiddleware = require('../middlewares/authMiddleware');
 
@@ -52,13 +52,14 @@ const mockMenuItemModel = {
   countDocuments: jest.fn(),
 };
 
-// Mock mongoose
+// Mock models
+jest.mock('../models', () => ({
+  MenuItem: mockMenuItemModel
+}));
+
+// Mock mongoose Types.ObjectId.isValid
 jest.mock('mongoose', () => {
-  const actualMongoose = jest.requireActual('mongoose');
   return {
-    ...actualMongoose,
-    model: jest.fn().mockImplementation(() => mockMenuItemModel),
-    Schema: actualMongoose.Schema,
     Types: {
       ObjectId: {
         isValid: jest.fn().mockReturnValue(true),
