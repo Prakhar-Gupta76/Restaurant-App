@@ -287,6 +287,196 @@ paths:
         '500':
           description: Server error
 
+  /api/orders:
+    post:
+      summary: Create a new order
+      tags:
+        - Orders
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+      responses:
+        '201':
+          description: Order created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '400':
+          description: Validation error or unavailable menu items
+        '401':
+          description: Unauthorized
+        '500':
+          description: Server error
+    get:
+      summary: Get all orders (admin only)
+      tags:
+        - Orders
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          description: Page number (default 1)
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          description: Items per page (default 10)
+          required: false
+          schema:
+            type: integer
+            default: 10
+        - name: startDate
+          in: query
+          description: Filter orders from this date (ISO format)
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: endDate
+          in: query
+          description: Filter orders until this date (ISO format)
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: status
+          in: query
+          description: Filter by order status
+          required: false
+          schema:
+            type: string
+            enum: [PLACED, PREPARING, READY, COMPLETED]
+      responses:
+        '200':
+          description: List of orders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrdersResponse'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Admin access required
+        '500':
+          description: Server error
+
+  /api/orders/user:
+    get:
+      summary: Get all orders for the current user
+      tags:
+        - Orders
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          description: Page number (default 1)
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          description: Items per page (default 10)
+          required: false
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: List of user orders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrdersResponse'
+        '401':
+          description: Unauthorized
+        '500':
+          description: Server error
+
+  /api/orders/{id}:
+    get:
+      summary: Get a single order by ID
+      tags:
+        - Orders
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          description: Order ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Order details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Not authorized to view this order
+        '404':
+          description: Order not found
+        '500':
+          description: Server error
+
+  /api/orders/{id}/status:
+    put:
+      summary: Update order status (admin only)
+      tags:
+        - Orders
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          description: Order ID
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateOrderStatusRequest'
+      responses:
+        '200':
+          description: Order status updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Order status updated to PREPARING"
+                  order:
+                    $ref: '#/components/schemas/Order'
+        '400':
+          description: Validation error or invalid status transition
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden - Admin access required
+        '404':
+          description: Order not found
+        '500':
+          description: Server error
+
 components:
   schemas:
     SignupRequest:
@@ -441,3 +631,116 @@ components:
             pages:
               type: integer
               example: 5
+
+    CreateOrderRequest:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required:
+              - menuItemId
+              - qty
+            properties:
+              menuItemId:
+                type: string
+                example: "60d21b4667d0d8992e610c85"
+              qty:
+                type: integer
+                minimum: 1
+                example: 2
+
+    UpdateOrderStatusRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [PLACED, PREPARING, READY, COMPLETED]
+          example: "PREPARING"
+
+    OrderItem:
+      type: object
+      properties:
+        menuItemId:
+          type: string
+          example: "60d21b4667d0d8992e610c85"
+        nameSnapshot:
+          type: string
+          example: "Margherita Pizza"
+        priceSnapshot:
+          type: number
+          format: float
+          example: 12.99
+        qty:
+          type: integer
+          example: 2
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "60d21b4667d0d8992e610c85"
+        user:
+          type: string
+          example: "60d21b4667d0d8992e610c85"
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        subtotal:
+          type: number
+          format: float
+          example: 25.98
+        tax:
+          type: number
+          format: float
+          example: 2.60
+        total:
+          type: number
+          format: float
+          example: 28.58
+        status:
+          type: string
+          enum: [PLACED, PREPARING, READY, COMPLETED]
+          example: "PLACED"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    OrdersResponse:
+      type: object
+      properties:
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/Order'
+        pagination:
+          type: object
+          properties:
+            total:
+              type: integer
+              example: 25
+            page:
+              type: integer
+              example: 1
+            limit:
+              type: integer
+              example: 10
+            pages:
+              type: integer
+              example: 3
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
