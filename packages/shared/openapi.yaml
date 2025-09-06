@@ -1,0 +1,10 @@
+openapi: 3.0.0
+info:
+  title: Restaurant App API
+  version: 1.0.0
+  description: API specification for the Restaurant App
+paths:
+  # Paths will be added as backend routes are developed
+components:
+  schemas:
+    # Schemas will be added as types are defined

@@ -1,0 +1,27 @@
+{
+  "name": "restaurant-app",
+  "version": "1.0.0",
+  "description": "MERN Restaurant App Monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "pnpm -r dev",
+    "dev:backend": "pnpm --filter backend dev",
+    "dev:frontend": "pnpm --filter frontend dev",
+    "lint": "pnpm -r lint",
+    "format": "pnpm -r format",
+    "test": "pnpm -r test",
+    "build": "pnpm -r build"
+  },
+  "keywords": [
+    "mern",
+    "restaurant",
+    "monorepo",
+    "pnpm"
+  ],
+  "author": "",
+  "license": "ISC"
+}

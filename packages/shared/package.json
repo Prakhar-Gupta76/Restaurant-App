@@ -1,0 +1,16 @@
+{
+  "name": "shared",
+  "version": "1.0.0",
+  "description": "OpenAPI contract and shared types for the Restaurant App",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "openapi",
+    "types",
+    "shared"
+  ],
+  "author": "",
+  "license": "ISC"
+}
