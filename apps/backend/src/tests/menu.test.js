@@ -1,309 +1,403 @@
 const request = require('supertest');
-const express = require('express');
-const request = require('supertest');
-const express = require('express');
-const menuController = require('../controllers/menuController');
-const authMiddleware = require('../middlewares/authMiddleware');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { app } = require('../../test-server');
+const { User, MenuItem } = require('../models');
 
-// Mock the auth middleware
-jest.mock('../middlewares/authMiddleware', () => ({
-  requireAuth: jest.fn((req, res, next) => next()),
-  requireAdmin: jest.fn((req, res, next) => {
-    req.user = { _id: 'admin-user-id', isAdmin: true };
-    next();
-  }),
-}));
+describe('Menu Tests', () => {
+  let adminUser;
+  let customerUser;
+  let adminToken;
+  let customerToken;
 
-// Mock the MenuItem model
-const mockMenuItem = {
-  _id: 'menu-item-id',
-  name: 'Test Pizza',
-  description: 'A test pizza',
-  price: 12.99,
-  category: 'pizza',
-  imageUrl: 'https://example.com/test-pizza.jpg',
-  available: true,
-};
+  beforeEach(async () => {
+    // Clear existing data
+    await User.deleteMany({});
+    await MenuItem.deleteMany({});
 
-const mockMenuItems = [
-  mockMenuItem,
-  {
-    _id: 'menu-item-id-2',
-    name: 'Test Pasta',
-    description: 'A test pasta',
-    price: 10.99,
-    category: 'pasta',
-    imageUrl: 'https://example.com/test-pasta.jpg',
-    available: true,
-  },
-];
+    // Create admin user
+    adminUser = await User.create({
+      name: 'Admin User',
+      email: 'admin@example.com',
+      passwordHash: await bcrypt.hash('password123', 10),
+      role: 'admin'
+    });
 
-// Mock the MenuItem model
-const mockMenuItemModel = {
-  find: jest.fn().mockReturnThis(),
-  findById: jest.fn(),
-  findByIdAndUpdate: jest.fn(),
-  findByIdAndDelete: jest.fn(),
-  create: jest.fn(),
-  sort: jest.fn().mockReturnThis(),
-  skip: jest.fn().mockReturnThis(),
-  limit: jest.fn().mockReturnThis(),
-  exec: jest.fn(),
-  countDocuments: jest.fn(),
-};
+    // Create customer user
+    customerUser = await User.create({
+      name: 'Customer User',
+      email: 'customer@example.com',
+      passwordHash: await bcrypt.hash('password123', 10),
+      role: 'customer'
+    });
 
-// Mock models
-jest.mock('../models', () => ({
-  MenuItem: mockMenuItemModel
-}));
+    // Generate tokens
+    adminToken = jwt.sign(
+      { id: adminUser.id, email: adminUser.email, role: adminUser.role },
+      process.env.JWT_ACCESS_SECRET || 'test-secret',
+      { expiresIn: '15m' }
+    );
 
-// Mock mongoose Types.ObjectId.isValid
-jest.mock('mongoose', () => {
-  return {
-    Types: {
-      ObjectId: {
-        isValid: jest.fn().mockReturnValue(true),
-      },
-    },
-  };
-});
-
-// Setup express app for testing
-const app = express();
-app.use(express.json());
-
-// Setup routes for testing
-app.get('/api/menu', menuController.getMenuItems);
-app.get('/api/menu/:id', menuController.getMenuItem);
-app.post('/api/menu', authMiddleware.requireAdmin, menuController.createMenuItem);
-app.put('/api/menu/:id', authMiddleware.requireAdmin, menuController.updateMenuItem);
-app.delete('/api/menu/:id', authMiddleware.requireAdmin, menuController.deleteMenuItem);
-app.patch('/api/menu/:id/toggle', authMiddleware.requireAdmin, menuController.toggleAvailability);
-
-describe('Menu Controller', () => {
-  let mongoServer;
-
-  beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create();
-    await mongoose.connect(mongoServer.getUri());
-  });
-
-  afterAll(async () => {
-    await mongoose.disconnect();
-    await mongoServer.stop();
-  });
-
-  beforeEach(() => {
-    jest.clearAllMocks();
+    customerToken = jwt.sign(
+      { id: customerUser.id, email: customerUser.email, role: customerUser.role },
+      process.env.JWT_ACCESS_SECRET || 'test-secret',
+      { expiresIn: '15m' }
+    );
   });
 
   describe('GET /api/menu', () => {
+    beforeEach(async () => {
+      // Create sample menu items
+      await MenuItem.create([
+        {
+          name: 'Margherita Pizza',
+          description: 'Classic pizza with tomato sauce and mozzarella',
+          price: 16.99,
+          category: 'Pizza',
+          available: true
+        },
+        {
+          name: 'Caesar Salad',
+          description: 'Fresh romaine lettuce with caesar dressing',
+          price: 8.99,
+          category: 'Salad',
+          available: true
+        },
+        {
+          name: 'Chocolate Cake',
+          description: 'Rich chocolate layer cake',
+          price: 7.99,
+          category: 'Dessert',
+          available: false
+        }
+      ]);
+    });
+
     it('should get all menu items with pagination', async () => {
-      mockMenuItemModel.exec.mockResolvedValueOnce(mockMenuItems);
-      mockMenuItemModel.countDocuments.mockResolvedValueOnce(2);
+      const response = await request(app)
+        .get('/api/menu')
+        .expect(200);
 
-      const response = await request(app).get('/api/menu');
-
-      expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('items');
       expect(response.body).toHaveProperty('pagination');
+      expect(response.body.items).toHaveLength(3);
+      expect(response.body.pagination.total).toBe(3);
+      expect(response.body.pagination.page).toBe(1);
+    });
+
+    it('should filter menu items by category', async () => {
+      const response = await request(app)
+        .get('/api/menu?category=Pizza')
+        .expect(200);
+
+      expect(response.body.items).toHaveLength(1);
+      expect(response.body.items[0].category).toBe('Pizza');
+    });
+
+    it('should search menu items by name and description', async () => {
+      const response = await request(app)
+        .get('/api/menu?q=chocolate')
+        .expect(200);
+
+      expect(response.body.items).toHaveLength(1);
+      expect(response.body.items[0].name).toContain('Chocolate');
+    });
+
+    it('should handle pagination correctly', async () => {
+      const response = await request(app)
+        .get('/api/menu?page=1&limit=2')
+        .expect(200);
+
       expect(response.body.items).toHaveLength(2);
-      expect(response.body.pagination).toEqual({
-        total: 2,
-        page: 1,
-        limit: 12,
-        pages: 1,
-      });
-    });
-
-    it('should filter by category', async () => {
-      mockMenuItemModel.exec.mockResolvedValueOnce([mockMenuItem]);
-      mockMenuItemModel.countDocuments.mockResolvedValueOnce(1);
-
-      const response = await request(app).get('/api/menu?category=pizza');
-
-      expect(response.status).toBe(200);
-      expect(mockMenuItemModel.find).toHaveBeenCalledWith(
-        expect.objectContaining({ category: 'pizza' })
-      );
-      expect(response.body.items).toHaveLength(1);
-    });
-
-    it('should search by query', async () => {
-      mockMenuItemModel.exec.mockResolvedValueOnce([mockMenuItem]);
-      mockMenuItemModel.countDocuments.mockResolvedValueOnce(1);
-
-      const response = await request(app).get('/api/menu?q=pizza');
-
-      expect(response.status).toBe(200);
-      expect(mockMenuItemModel.find).toHaveBeenCalledWith(
-        expect.objectContaining({
-          $or: [
-            { name: expect.any(Object) },
-            { description: expect.any(Object) },
-          ],
-        })
-      );
-      expect(response.body.items).toHaveLength(1);
+      expect(response.body.pagination.page).toBe(1);
+      expect(response.body.pagination.limit).toBe(2);
+      expect(response.body.pagination.pages).toBe(2);
     });
   });
 
   describe('GET /api/menu/:id', () => {
-    it('should get a menu item by id', async () => {
-      mockMenuItemModel.findById.mockResolvedValueOnce(mockMenuItem);
+    let menuItem;
 
-      const response = await request(app).get('/api/menu/menu-item-id');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toEqual(mockMenuItem);
-      expect(mockMenuItemModel.findById).toHaveBeenCalledWith('menu-item-id');
+    beforeEach(async () => {
+      menuItem = await MenuItem.create({
+        name: 'Test Pizza',
+        description: 'Test description',
+        price: 15.99,
+        category: 'Pizza',
+        available: true
+      });
     });
 
-    it('should return 404 if menu item not found', async () => {
-      mockMenuItemModel.findById.mockResolvedValueOnce(null);
+    it('should get a single menu item by ID', async () => {
+      const response = await request(app)
+        .get(`/api/menu/${menuItem.id}`)
+        .expect(200);
 
-      const response = await request(app).get('/api/menu/nonexistent-id');
+      expect(response.body.name).toBe('Test Pizza');
+      expect(response.body.price).toBe(15.99);
+    });
 
-      expect(response.status).toBe(404);
-      expect(response.body).toHaveProperty('message');
+    it('should return 404 for non-existent menu item', async () => {
+      const response = await request(app)
+        .get('/api/menu/507f1f77bcf86cd799439011')
+        .expect(404);
+
+      expect(response.body.message).toBe('Menu item not found');
     });
   });
 
   describe('POST /api/menu', () => {
-    it('should create a new menu item', async () => {
-      mockMenuItemModel.create.mockResolvedValueOnce(mockMenuItem);
+    it('should create a new menu item as admin', async () => {
+      const menuData = {
+        name: 'New Pizza',
+        description: 'A delicious new pizza',
+        price: 18.99,
+        category: 'Pizza',
+        imageUrl: 'https://example.com/image.jpg',
+        available: true
+      };
 
       const response = await request(app)
         .post('/api/menu')
-        .send({
-          name: 'Test Pizza',
-          description: 'A test pizza',
-          price: 12.99,
-          category: 'pizza',
-          imageUrl: 'https://example.com/test-pizza.jpg',
-        });
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(menuData)
+        .expect(201);
 
-      expect(response.status).toBe(201);
-      expect(response.body).toEqual(mockMenuItem);
-      expect(mockMenuItemModel.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: 'Test Pizza',
-          description: 'A test pizza',
-          price: 12.99,
-          category: 'pizza',
-          imageUrl: 'https://example.com/test-pizza.jpg',
-        })
-      );
+      expect(response.body.name).toBe(menuData.name);
+      expect(response.body.price).toBe(menuData.price);
+      expect(response.body.category).toBe(menuData.category);
+
+      // Verify item was created in database
+      const createdItem = await MenuItem.findById(response.body.id);
+      expect(createdItem).toBeTruthy();
     });
 
-    it('should return 400 for invalid input', async () => {
+    it('should return 403 for non-admin users', async () => {
+      const menuData = {
+        name: 'New Pizza',
+        description: 'A delicious new pizza',
+        price: 18.99,
+        category: 'Pizza'
+      };
+
       const response = await request(app)
         .post('/api/menu')
-        .send({
-          // Missing required fields
-          description: 'A test pizza',
-        });
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send(menuData)
+        .expect(403);
 
-      expect(response.status).toBe(400);
+      expect(response.body.message).toBe('Access denied: Admin privileges required');
+    });
+
+    it('should return 401 without authentication', async () => {
+      const menuData = {
+        name: 'New Pizza',
+        description: 'A delicious new pizza',
+        price: 18.99,
+        category: 'Pizza'
+      };
+
+      const response = await request(app)
+        .post('/api/menu')
+        .send(menuData)
+        .expect(401);
+
+      expect(response.body.message).toBe('No token provided');
+    });
+
+    it('should return 400 for invalid input data', async () => {
+      const invalidData = {
+        name: 'A', // Too short
+        description: 'Short', // Too short
+        price: -5, // Negative price
+        category: 'X' // Too short
+      };
+
+      const response = await request(app)
+        .post('/api/menu')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(invalidData)
+        .expect(400);
+
+      expect(response.body).toHaveProperty('message', 'Validation error');
       expect(response.body).toHaveProperty('errors');
     });
   });
 
   describe('PUT /api/menu/:id', () => {
-    it('should update a menu item', async () => {
-      mockMenuItemModel.findByIdAndUpdate.mockResolvedValueOnce({
-        ...mockMenuItem,
-        name: 'Updated Pizza',
+    let menuItem;
+
+    beforeEach(async () => {
+      menuItem = await MenuItem.create({
+        name: 'Original Pizza',
+        description: 'Original description',
+        price: 15.99,
+        category: 'Pizza',
+        available: true
       });
-
-      const response = await request(app)
-        .put('/api/menu/menu-item-id')
-        .send({
-          name: 'Updated Pizza',
-          description: 'An updated pizza',
-          price: 14.99,
-          category: 'pizza',
-          imageUrl: 'https://example.com/updated-pizza.jpg',
-        });
-
-      expect(response.status).toBe(200);
-      expect(response.body.name).toBe('Updated Pizza');
-      expect(mockMenuItemModel.findByIdAndUpdate).toHaveBeenCalledWith(
-        'menu-item-id',
-        expect.any(Object),
-        { new: true }
-      );
     });
 
-    it('should return 404 if menu item not found', async () => {
-      mockMenuItemModel.findByIdAndUpdate.mockResolvedValueOnce(null);
+    it('should update menu item as admin', async () => {
+      const updateData = {
+        name: 'Updated Pizza',
+        description: 'Updated description',
+        price: 19.99,
+        category: 'Pizza',
+        available: false
+      };
 
       const response = await request(app)
-        .put('/api/menu/nonexistent-id')
-        .send({
-          name: 'Updated Pizza',
-          description: 'An updated pizza',
-          price: 14.99,
-          category: 'pizza',
-          imageUrl: 'https://example.com/updated-pizza.jpg',
-        });
+        .put(`/api/menu/${menuItem.id}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(updateData)
+        .expect(200);
 
-      expect(response.status).toBe(404);
-      expect(response.body).toHaveProperty('message');
+      expect(response.body.name).toBe('Updated Pizza');
+      expect(response.body.price).toBe(19.99);
+      expect(response.body.available).toBe(false);
+
+      // Verify item was updated in database
+      const updatedItem = await MenuItem.findById(menuItem.id);
+      expect(updatedItem.name).toBe('Updated Pizza');
+    });
+
+    it('should return 404 for non-existent menu item', async () => {
+      const updateData = {
+        name: 'Updated Pizza',
+        description: 'Updated description',
+        price: 19.99,
+        category: 'Pizza'
+      };
+
+      const response = await request(app)
+        .put('/api/menu/507f1f77bcf86cd799439011')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(updateData)
+        .expect(404);
+
+      expect(response.body.message).toBe('Menu item not found');
+    });
+
+    it('should return 403 for non-admin users', async () => {
+      const updateData = {
+        name: 'Updated Pizza',
+        description: 'Updated description',
+        price: 19.99,
+        category: 'Pizza'
+      };
+
+      const response = await request(app)
+        .put(`/api/menu/${menuItem.id}`)
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send(updateData)
+        .expect(403);
+
+      expect(response.body.message).toBe('Access denied: Admin privileges required');
     });
   });
 
   describe('DELETE /api/menu/:id', () => {
-    it('should delete a menu item', async () => {
-      mockMenuItemModel.findByIdAndDelete.mockResolvedValueOnce(mockMenuItem);
+    let menuItem;
 
-      const response = await request(app).delete('/api/menu/menu-item-id');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('message');
-      expect(mockMenuItemModel.findByIdAndDelete).toHaveBeenCalledWith('menu-item-id');
+    beforeEach(async () => {
+      menuItem = await MenuItem.create({
+        name: 'Pizza to Delete',
+        description: 'This pizza will be deleted',
+        price: 15.99,
+        category: 'Pizza',
+        available: true
+      });
     });
 
-    it('should return 404 if menu item not found', async () => {
-      mockMenuItemModel.findByIdAndDelete.mockResolvedValueOnce(null);
+    it('should delete menu item as admin', async () => {
+      const response = await request(app)
+        .delete(`/api/menu/${menuItem.id}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
 
-      const response = await request(app).delete('/api/menu/nonexistent-id');
+      expect(response.body.message).toBe('Menu item deleted successfully');
 
-      expect(response.status).toBe(404);
-      expect(response.body).toHaveProperty('message');
+      // Verify item was deleted from database
+      const deletedItem = await MenuItem.findById(menuItem.id);
+      expect(deletedItem).toBeNull();
+    });
+
+    it('should return 404 for non-existent menu item', async () => {
+      const response = await request(app)
+        .delete('/api/menu/507f1f77bcf86cd799439011')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(404);
+
+      expect(response.body.message).toBe('Menu item not found');
+    });
+
+    it('should return 403 for non-admin users', async () => {
+      const response = await request(app)
+        .delete(`/api/menu/${menuItem.id}`)
+        .set('Authorization', `Bearer ${customerToken}`)
+        .expect(403);
+
+      expect(response.body.message).toBe('Access denied: Admin privileges required');
     });
   });
 
   describe('PATCH /api/menu/:id/toggle', () => {
-    it('should toggle menu item availability', async () => {
-      mockMenuItemModel.findById.mockResolvedValueOnce({
-        ...mockMenuItem,
-        available: true,
-      });
-      mockMenuItemModel.findByIdAndUpdate.mockResolvedValueOnce({
-        ...mockMenuItem,
-        available: false,
-      });
+    let menuItem;
 
-      const response = await request(app).patch('/api/menu/menu-item-id/toggle');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('message');
-      expect(response.body).toHaveProperty('available', false);
-      expect(mockMenuItemModel.findByIdAndUpdate).toHaveBeenCalledWith(
-        'menu-item-id',
-        { available: false },
-        { new: true }
-      );
+    beforeEach(async () => {
+      menuItem = await MenuItem.create({
+        name: 'Toggle Pizza',
+        description: 'This pizza will be toggled',
+        price: 15.99,
+        category: 'Pizza',
+        available: true
+      });
     });
 
-    it('should return 404 if menu item not found', async () => {
-      mockMenuItemModel.findById.mockResolvedValueOnce(null);
+    it('should toggle menu item availability as admin', async () => {
+      const response = await request(app)
+        .patch(`/api/menu/${menuItem.id}/toggle`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
 
-      const response = await request(app).patch('/api/menu/nonexistent-id/toggle');
+      expect(response.body.message).toBe('Menu item is now unavailable');
+      expect(response.body.available).toBe(false);
 
-      expect(response.status).toBe(404);
-      expect(response.body).toHaveProperty('message');
+      // Verify availability was toggled in database
+      const toggledItem = await MenuItem.findById(menuItem.id);
+      expect(toggledItem.available).toBe(false);
+    });
+
+    it('should toggle from unavailable to available', async () => {
+      // First make it unavailable
+      menuItem.available = false;
+      await menuItem.save();
+
+      const response = await request(app)
+        .patch(`/api/menu/${menuItem.id}/toggle`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+
+      expect(response.body.message).toBe('Menu item is now available');
+      expect(response.body.available).toBe(true);
+    });
+
+    it('should return 404 for non-existent menu item', async () => {
+      const response = await request(app)
+        .patch('/api/menu/507f1f77bcf86cd799439011/toggle')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(404);
+
+      expect(response.body.message).toBe('Menu item not found');
+    });
+
+    it('should return 403 for non-admin users', async () => {
+      const response = await request(app)
+        .patch(`/api/menu/${menuItem.id}/toggle`)
+        .set('Authorization', `Bearer ${customerToken}`)
+        .expect(403);
+
+      expect(response.body.message).toBe('Access denied: Admin privileges required');
     });
   });
 });

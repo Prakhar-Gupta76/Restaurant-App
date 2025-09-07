@@ -1,246 +1,470 @@
 const request = require('supertest');
-const express = require('express');
-const orderController = require('../controllers/orderController');
-const authMiddleware = require('../middlewares/authMiddleware');
-const { socket } = require('../utils');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { app } = require('../../test-server');
+const { User, MenuItem, Order } = require('../models');
 
-// Mock the socket utilities
+// Mock socket utility
 jest.mock('../utils/socket', () => ({
-  emitToAdmin: jest.fn(),
-  emitToOrder: jest.fn(),
-  initialize: jest.fn()
+  socket: {
+    emitToAdmin: jest.fn(),
+    emitToOrder: jest.fn()
+  }
 }));
 
-// Mock the auth middleware
-jest.mock('../middlewares/authMiddleware', () => ({
-  requireAuth: jest.fn((req, res, next) => {
-    req.user = { id: 'user-id', email: 'user@example.com', role: 'customer' };
-    next();
-  }),
-  requireAdmin: jest.fn((req, res, next) => {
-    req.user = { id: 'admin-id', email: 'admin@example.com', role: 'admin' };
-    next();
-  }),
-}));
+describe('Order Tests', () => {
+  let adminUser;
+  let customerUser;
+  let adminToken;
+  let customerToken;
+  let menuItems;
 
-// Mock the Order model
-const mockOrder = {
-  _id: 'order-id',
-  id: 'order-id',
-  user: 'user-id',
-  items: [
-    {
-      menuItemId: 'menu-item-id',
-      nameSnapshot: 'Test Pizza',
-      priceSnapshot: 12.99,
-      qty: 2
-    }
-  ],
-  subtotal: 25.98,
-  tax: 2.60,
-  total: 28.58,
-  status: 'PLACED',
-  createdAt: new Date(),
-  updatedAt: new Date(),
-  save: jest.fn().mockResolvedValue(true)
-};
+  beforeEach(async () => {
+    // Clear existing data
+    await User.deleteMany({});
+    await MenuItem.deleteMany({});
+    await Order.deleteMany({});
 
-const mockOrders = [
-  mockOrder,
-  {
-    _id: 'order-id-2',
-    id: 'order-id-2',
-    user: 'user-id',
-    items: [
+    // Create admin user
+    adminUser = await User.create({
+      name: 'Admin User',
+      email: 'admin@example.com',
+      passwordHash: await bcrypt.hash('password123', 10),
+      role: 'admin'
+    });
+
+    // Create customer user
+    customerUser = await User.create({
+      name: 'Customer User',
+      email: 'customer@example.com',
+      passwordHash: await bcrypt.hash('password123', 10),
+      role: 'customer'
+    });
+
+    // Generate tokens
+    adminToken = jwt.sign(
+      { id: adminUser.id, email: adminUser.email, role: adminUser.role },
+      process.env.JWT_ACCESS_SECRET || 'test-secret',
+      { expiresIn: '15m' }
+    );
+
+    customerToken = jwt.sign(
+      { id: customerUser.id, email: customerUser.email, role: customerUser.role },
+      process.env.JWT_ACCESS_SECRET || 'test-secret',
+      { expiresIn: '15m' }
+    );
+
+    // Create sample menu items
+    menuItems = await MenuItem.create([
       {
-        menuItemId: 'menu-item-id-2',
-        nameSnapshot: 'Test Pasta',
-        priceSnapshot: 10.99,
-        qty: 1
+        name: 'Margherita Pizza',
+        description: 'Classic pizza with tomato sauce and mozzarella',
+        price: 16.99,
+        category: 'Pizza',
+        available: true
+      },
+      {
+        name: 'Caesar Salad',
+        description: 'Fresh romaine lettuce with caesar dressing',
+        price: 8.99,
+        category: 'Salad',
+        available: true
+      },
+      {
+        name: 'Unavailable Item',
+        description: 'This item is not available',
+        price: 5.99,
+        category: 'Appetizer',
+        available: false
       }
-    ],
-    subtotal: 10.99,
-    tax: 1.10,
-    total: 12.09,
-    status: 'COMPLETED',
-    createdAt: new Date(),
-    updatedAt: new Date()
-  }
-];
-
-// Mock the MenuItem model
-const mockMenuItems = [
-  {
-    _id: 'menu-item-id',
-    id: 'menu-item-id',
-    name: 'Test Pizza',
-    price: 12.99,
-    available: true
-  },
-  {
-    _id: 'menu-item-id-2',
-    id: 'menu-item-id-2',
-    name: 'Test Pasta',
-    price: 10.99,
-    available: true
-  }
-];
-
-// Mock the models
-jest.mock('../models', () => ({
-  Order: {
-    find: jest.fn().mockReturnThis(),
-    findById: jest.fn(),
-    create: jest.fn(),
-    countDocuments: jest.fn(),
-    populate: jest.fn().mockReturnThis(),
-    sort: jest.fn().mockReturnThis(),
-    skip: jest.fn().mockReturnThis(),
-    limit: jest.fn().mockReturnThis(),
-  },
-  MenuItem: {
-    find: jest.fn(),
-  }
-}));
-
-// Create Express app for testing
-const app = express();
-app.use(express.json());
-
-// Setup routes for testing
-app.post('/api/orders', authMiddleware.requireAuth, orderController.createOrder);
-app.get('/api/orders/:id', authMiddleware.requireAuth, orderController.getOrderById);
-app.get('/api/orders/user', authMiddleware.requireAuth, orderController.getUserOrders);
-app.get('/api/orders', authMiddleware.requireAdmin, orderController.getAllOrders);
-app.put('/api/orders/:id/status', authMiddleware.requireAdmin, orderController.updateOrderStatus);
-
-describe('Order Controller', () => {
-  let models;
-  
-  beforeEach(() => {
-    jest.clearAllMocks();
-    models = require('../models');
+    ]);
   });
-  
+
   describe('POST /api/orders', () => {
-    it('should create a new order successfully', async () => {
-      // Mock MenuItem.find to return menu items
-      models.MenuItem.find.mockResolvedValue(mockMenuItems);
-      
-      // Mock Order.create to return a new order
-      models.Order.create.mockResolvedValue(mockOrder);
-      
+    it('should create a new order as customer', async () => {
+      const orderData = {
+        items: [
+          {
+            menuItemId: menuItems[0].id,
+            qty: 2
+          },
+          {
+            menuItemId: menuItems[1].id,
+            qty: 1
+          }
+        ]
+      };
+
       const response = await request(app)
         .post('/api/orders')
-        .send({
-          items: [
-            { menuItemId: 'menu-item-id', qty: 2 }
-          ]
-        });
-      
-      expect(response.status).toBe(201);
-      expect(response.body).toEqual(mockOrder);
-      expect(models.MenuItem.find).toHaveBeenCalled();
-      expect(models.Order.create).toHaveBeenCalled();
-      expect(socket.emitToAdmin).toHaveBeenCalledWith('newOrder', expect.any(Object));
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send(orderData)
+        .expect(201);
+
+      expect(response.body).toHaveProperty('id');
+      expect(response.body.user).toBe(customerUser.id);
+      expect(response.body.items).toHaveLength(2);
+      expect(response.body.status).toBe('PLACED');
+      expect(response.body.subtotal).toBe(42.97); // (16.99 * 2) + (8.99 * 1)
+      expect(response.body.tax).toBe(4.30); // 10% of subtotal
+      expect(response.body.total).toBe(47.27); // subtotal + tax
+
+      // Verify order was created in database
+      const createdOrder = await Order.findById(response.body.id);
+      expect(createdOrder).toBeTruthy();
+      expect(createdOrder.items[0].nameSnapshot).toBe('Margherita Pizza');
+      expect(createdOrder.items[0].priceSnapshot).toBe(16.99);
     });
-    
-    it('should return 400 if menu items are not available', async () => {
-      // Mock MenuItem.find to return empty array (no items found)
-      models.MenuItem.find.mockResolvedValue([]);
-      
+
+    it('should return 400 for unavailable menu items', async () => {
+      const orderData = {
+        items: [
+          {
+            menuItemId: menuItems[2].id, // Unavailable item
+            qty: 1
+          }
+        ]
+      };
+
       const response = await request(app)
         .post('/api/orders')
-        .send({
-          items: [
-            { menuItemId: 'non-existent-id', qty: 2 }
-          ]
-        });
-      
-      expect(response.status).toBe(400);
-      expect(response.body.message).toContain('unavailable');
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send(orderData)
+        .expect(400);
+
+      expect(response.body.message).toBe('One or more menu items are unavailable or do not exist');
     });
-    
-    it('should return 400 for validation errors', async () => {
+
+    it('should return 400 for non-existent menu items', async () => {
+      const orderData = {
+        items: [
+          {
+            menuItemId: '507f1f77bcf86cd799439011', // Non-existent ID
+            qty: 1
+          }
+        ]
+      };
+
       const response = await request(app)
         .post('/api/orders')
-        .send({
-          items: [] // Empty items array should fail validation
-        });
-      
-      expect(response.status).toBe(400);
-      expect(response.body.message).toBe('Validation error');
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send(orderData)
+        .expect(400);
+
+      expect(response.body.message).toBe('One or more menu items are unavailable or do not exist');
+    });
+
+    it('should return 401 without authentication', async () => {
+      const orderData = {
+        items: [
+          {
+            menuItemId: menuItems[0].id,
+            qty: 1
+          }
+        ]
+      };
+
+      const response = await request(app)
+        .post('/api/orders')
+        .send(orderData)
+        .expect(401);
+
+      expect(response.body.message).toBe('No token provided');
+    });
+
+    it('should return 400 for invalid input data', async () => {
+      const invalidData = {
+        items: [
+          {
+            menuItemId: menuItems[0].id,
+            qty: 0 // Invalid quantity
+          }
+        ]
+      };
+
+      const response = await request(app)
+        .post('/api/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send(invalidData)
+        .expect(400);
+
+      expect(response.body).toHaveProperty('message', 'Validation error');
     });
   });
-  
+
+  describe('GET /api/orders/user', () => {
+    let customerOrder;
+
+    beforeEach(async () => {
+      // Create an order for the customer
+      customerOrder = await Order.create({
+        user: customerUser.id,
+        items: [
+          {
+            menuItemId: menuItems[0].id,
+            nameSnapshot: 'Margherita Pizza',
+            priceSnapshot: 16.99,
+            qty: 1
+          }
+        ],
+        subtotal: 16.99,
+        tax: 1.70,
+        total: 18.69,
+        status: 'PLACED'
+      });
+    });
+
+    it('should get user orders with pagination', async () => {
+      const response = await request(app)
+        .get('/api/orders/user')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .expect(200);
+
+      expect(response.body).toHaveProperty('orders');
+      expect(response.body).toHaveProperty('pagination');
+      expect(response.body.orders).toHaveLength(1);
+      expect(response.body.orders[0].id).toBe(customerOrder.id);
+      expect(response.body.pagination.total).toBe(1);
+    });
+
+    it('should return 401 without authentication', async () => {
+      const response = await request(app)
+        .get('/api/orders/user')
+        .expect(401);
+
+      expect(response.body.message).toBe('No token provided');
+    });
+  });
+
   describe('GET /api/orders/:id', () => {
-    it('should return an order by ID', async () => {
-      // Mock findById to return an order
-      models.Order.findById.mockResolvedValue(mockOrder);
-      
-      const response = await request(app)
-        .get('/api/orders/order-id');
-      
-      expect(response.status).toBe(200);
-      expect(response.body).toEqual(mockOrder);
+    let customerOrder;
+
+    beforeEach(async () => {
+      // Create an order for the customer
+      customerOrder = await Order.create({
+        user: customerUser.id,
+        items: [
+          {
+            menuItemId: menuItems[0].id,
+            nameSnapshot: 'Margherita Pizza',
+            priceSnapshot: 16.99,
+            qty: 1
+          }
+        ],
+        subtotal: 16.99,
+        tax: 1.70,
+        total: 18.69,
+        status: 'PLACED'
+      });
     });
-    
-    it('should return 404 if order not found', async () => {
-      // Mock findById to return null
-      models.Order.findById.mockResolvedValue(null);
-      
+
+    it('should get order details for order owner', async () => {
       const response = await request(app)
-        .get('/api/orders/non-existent-id');
-      
-      expect(response.status).toBe(404);
+        .get(`/api/orders/${customerOrder.id}`)
+        .set('Authorization', `Bearer ${customerToken}`)
+        .expect(200);
+
+      expect(response.body.id).toBe(customerOrder.id);
+      expect(response.body.user).toBe(customerUser.id);
+      expect(response.body.status).toBe('PLACED');
+    });
+
+    it('should get order details for admin', async () => {
+      const response = await request(app)
+        .get(`/api/orders/${customerOrder.id}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+
+      expect(response.body.id).toBe(customerOrder.id);
+      expect(response.body.user).toBe(customerUser.id);
+    });
+
+    it('should return 403 for unauthorized access', async () => {
+      // Create another customer
+      const anotherCustomer = await User.create({
+        name: 'Another Customer',
+        email: 'another@example.com',
+        passwordHash: await bcrypt.hash('password123', 10),
+        role: 'customer'
+      });
+
+      const anotherToken = jwt.sign(
+        { id: anotherCustomer.id, email: anotherCustomer.email, role: anotherCustomer.role },
+        process.env.JWT_ACCESS_SECRET || 'test-secret',
+        { expiresIn: '15m' }
+      );
+
+      const response = await request(app)
+        .get(`/api/orders/${customerOrder.id}`)
+        .set('Authorization', `Bearer ${anotherToken}`)
+        .expect(403);
+
+      expect(response.body.message).toBe('Not authorized to view this order');
+    });
+
+    it('should return 404 for non-existent order', async () => {
+      const response = await request(app)
+        .get('/api/orders/507f1f77bcf86cd799439011')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .expect(404);
+
       expect(response.body.message).toBe('Order not found');
     });
   });
-  
+
+  describe('GET /api/orders (admin)', () => {
+    let customerOrder;
+
+    beforeEach(async () => {
+      // Create an order for the customer
+      customerOrder = await Order.create({
+        user: customerUser.id,
+        items: [
+          {
+            menuItemId: menuItems[0].id,
+            nameSnapshot: 'Margherita Pizza',
+            priceSnapshot: 16.99,
+            qty: 1
+          }
+        ],
+        subtotal: 16.99,
+        tax: 1.70,
+        total: 18.69,
+        status: 'PLACED'
+      });
+    });
+
+    it('should get all orders as admin', async () => {
+      const response = await request(app)
+        .get('/api/orders')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+
+      expect(response.body).toHaveProperty('orders');
+      expect(response.body).toHaveProperty('pagination');
+      expect(response.body.orders).toHaveLength(1);
+      expect(response.body.orders[0].id).toBe(customerOrder.id);
+    });
+
+    it('should filter orders by status', async () => {
+      const response = await request(app)
+        .get('/api/orders?status=PLACED')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+
+      expect(response.body.orders).toHaveLength(1);
+      expect(response.body.orders[0].status).toBe('PLACED');
+    });
+
+    it('should return 403 for non-admin users', async () => {
+      const response = await request(app)
+        .get('/api/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .expect(403);
+
+      expect(response.body.message).toBe('Access denied: Admin privileges required');
+    });
+  });
+
   describe('PUT /api/orders/:id/status', () => {
-    it('should update order status successfully', async () => {
-      // Create a copy of mockOrder with status PLACED
-      const orderToUpdate = { ...mockOrder, status: 'PLACED' };
-      
-      // Mock findById to return the order
-      models.Order.findById.mockResolvedValue(orderToUpdate);
-      
-      const response = await request(app)
-        .put('/api/orders/order-id/status')
-        .send({ status: 'PREPARING' });
-      
-      expect(response.status).toBe(200);
-      expect(orderToUpdate.status).toBe('PREPARING');
-      expect(orderToUpdate.save).toHaveBeenCalled();
-      expect(socket.emitToOrder).toHaveBeenCalledWith('order-id', 'orderUpdated', expect.any(Object));
+    let customerOrder;
+
+    beforeEach(async () => {
+      // Create an order for the customer
+      customerOrder = await Order.create({
+        user: customerUser.id,
+        items: [
+          {
+            menuItemId: menuItems[0].id,
+            nameSnapshot: 'Margherita Pizza',
+            priceSnapshot: 16.99,
+            qty: 1
+          }
+        ],
+        subtotal: 16.99,
+        tax: 1.70,
+        total: 18.69,
+        status: 'PLACED'
+      });
     });
-    
-    it('should return 400 for invalid status transition', async () => {
-      // Create a copy of mockOrder with status COMPLETED
-      const orderToUpdate = { ...mockOrder, status: 'COMPLETED' };
-      
-      // Mock findById to return the order
-      models.Order.findById.mockResolvedValue(orderToUpdate);
-      
+
+    it('should update order status as admin', async () => {
+      const updateData = {
+        status: 'PREPARING'
+      };
+
       const response = await request(app)
-        .put('/api/orders/order-id/status')
-        .send({ status: 'PLACED' });
-      
-      expect(response.status).toBe(400);
-      expect(response.body.message).toContain('Cannot change status');
-      expect(orderToUpdate.save).not.toHaveBeenCalled();
+        .put(`/api/orders/${customerOrder.id}/status`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(updateData)
+        .expect(200);
+
+      expect(response.body.message).toBe('Order status updated to PREPARING');
+      expect(response.body.order.status).toBe('PREPARING');
+
+      // Verify status was updated in database
+      const updatedOrder = await Order.findById(customerOrder.id);
+      expect(updatedOrder.status).toBe('PREPARING');
     });
-    
-    it('should return 404 if order not found', async () => {
-      // Mock findById to return null
-      models.Order.findById.mockResolvedValue(null);
-      
+
+    it('should not allow invalid status transitions', async () => {
+      // First update to PREPARING
+      customerOrder.status = 'PREPARING';
+      await customerOrder.save();
+
+      const updateData = {
+        status: 'PLACED' // Cannot go backwards
+      };
+
       const response = await request(app)
-        .put('/api/orders/non-existent-id/status')
-        .send({ status: 'PREPARING' });
-      
-      expect(response.status).toBe(404);
+        .put(`/api/orders/${customerOrder.id}/status`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(updateData)
+        .expect(400);
+
+      expect(response.body.message).toBe('Cannot change status from PREPARING to PLACED');
+    });
+
+    it('should return 404 for non-existent order', async () => {
+      const updateData = {
+        status: 'PREPARING'
+      };
+
+      const response = await request(app)
+        .put('/api/orders/507f1f77bcf86cd799439011/status')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(updateData)
+        .expect(404);
+
       expect(response.body.message).toBe('Order not found');
+    });
+
+    it('should return 403 for non-admin users', async () => {
+      const updateData = {
+        status: 'PREPARING'
+      };
+
+      const response = await request(app)
+        .put(`/api/orders/${customerOrder.id}/status`)
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send(updateData)
+        .expect(403);
+
+      expect(response.body.message).toBe('Access denied: Admin privileges required');
+    });
+
+    it('should return 400 for invalid status', async () => {
+      const updateData = {
+        status: 'INVALID_STATUS'
+      };
+
+      const response = await request(app)
+        .put(`/api/orders/${customerOrder.id}/status`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(updateData)
+        .expect(400);
+
+      expect(response.body).toHaveProperty('message', 'Validation error');
     });
   });
 });
